@@ -10,7 +10,7 @@ In the animation below, the shrunk image is rescaled to the original height. It 
   <tbody>
     <tr>
       <td>
-<video src="https://github.com/FliegendeWurst/content-aware-shrink/assets/12560461/30bcf1e6-afcc-4717-b86e-2a8a4f71abea">
+<video src="https://github.com/FliegendeWurst/content-aware-shrink/assets/12560461/d08017e6-51de-41e6-8283-4dd02e49952e">
 </td></tr></tbody></table>
 
 ## License
