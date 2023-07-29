@@ -13,19 +13,22 @@ fn init() {
 #[test]
 fn noise_test() {
 	init();
-	let mut img = image::load(BufReader::new(File::open("tests/random.png").unwrap()), ImageFormat::Png)
-		.unwrap()
-		.into_rgb8();
+	let mut img = image::load(
+		BufReader::new(File::open("tests/random.png").unwrap()),
+		ImageFormat::Png,
+	)
+	.unwrap()
+	.into_rgb8();
 
 	let mut img_data = ImageData::new(&img, Axis::Horizontal, SmallRng::from_seed([0x57; 32]));
 
-    for n in 1..99 {
+	for n in 1..99 {
 		img = cut_once(&img, Axis::Horizontal);
 		img_data.cut_once();
 		assert_eq!(img, img_data.get_img(), "nth iteration wrong (n = {n})");
 	}
 	assert_eq!(2, img_data.get_img().height());
-    assert_eq!(2, img.height());
+	assert_eq!(2, img.height());
 	// cannot shrink further
 }
 

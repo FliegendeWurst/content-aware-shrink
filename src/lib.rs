@@ -130,12 +130,12 @@ impl<R: Rng> ImageData<R> {
 			}
 		}
 
-        for x in self.rescan.drain() {
-            if self.nodes[x].neighbors.is_empty() {
-                continue;
-            }
-            q.add((u32::MAX - d[x], rng.gen_range(u32::MAX / 2..u32::MAX), x as Index));
-        }
+		for x in self.rescan.drain() {
+			if self.nodes[x].neighbors.is_empty() {
+				continue;
+			}
+			q.add((u32::MAX - d[x], rng.gen_range(u32::MAX / 2..u32::MAX), x as Index));
+		}
 
 		let mut best_end = u32::MAX;
 		while let Some((total_cost, _rand, src)) = q.remove_elem() {
@@ -144,7 +144,7 @@ impl<R: Rng> ImageData<R> {
 				continue;
 			}
 			if u32::MAX - total_cost >= best_end {
-                break;
+				break;
 			}
 			for &next_node in &self.nodes[src].neighbors {
 				let next_node = next_node as usize;
@@ -441,7 +441,7 @@ fn calc_cost(a: &Rgb<u8>, b: &Rgb<u8>) -> u32 {
 }
 
 struct PixelNode {
-    // total size: 40 bytes (should be optimized further)
+	// total size: 40 bytes (should be optimized further)
 	color: Rgb<u8>,
 	cost: u32,
 	neighbors: ArrayVec<Index, 3>,
