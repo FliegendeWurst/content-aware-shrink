@@ -19,11 +19,11 @@ fn noise_test() {
 	.unwrap()
 	.into_rgb8();
 
-	let mut img_data = ImageData::new(&img, Axis::Horizontal, None);
+	let mut img_data = ImageData::new(img.clone(), None);
 
 	for n in 1..99 {
 		img = cut_once(&img, Axis::Horizontal);
-		img_data.cut_once();
+		img_data.cut_once(Axis::Horizontal);
 		assert_eq!(img, img_data.get_img(), "nth iteration wrong (n = {n})");
 	}
 	assert_eq!(2, img_data.get_img().height());
@@ -41,10 +41,10 @@ fn picture_test() {
 	.unwrap()
 	.into_rgb8();
 
-	let mut img_data = ImageData::new(&img, Axis::Horizontal, None);
+	let mut img_data = ImageData::new(img.clone(), None);
 	for n in 1..99 {
 		img = cut_once(&img, Axis::Horizontal);
-		img_data.cut_once();
+		img_data.cut_once(Axis::Horizontal);
 		if img != img_data.get_img() {
 			panic!("nth iteration wrong (n = {n})");
 		}

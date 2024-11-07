@@ -77,13 +77,13 @@ fn main() {
 		}
 	} else {
 		//let axis = if img.height() != save_height { Axis::Horizontal } else { Axis::Vertical };
-		let axis = Axis::Horizontal;
-		let mut img_data = ImageData::new(&img, axis, mask);
+		let height = img.height();
+		let mut img_data = ImageData::new(img, mask);
 		let mut threads = vec![];
 		for i in 0..cuts {
-			img_data.cut_once();
-			println!("iteration {i}, img height {}", img.height() - 1 - i);
-			if (save_interval != 0 && i % save_interval == 0) || img.height() - 1 - i == save_height {
+			img_data.cut_once(Axis::Horizontal);
+			println!("iteration {i}, img height {}", height - 1 - i);
+			if (save_interval != 0 && i % save_interval == 0) || height - 1 - i == save_height {
 				let mut img = img_data.get_img();
 				let exit = img.height() == save_height && img.width() == save_width;
 				threads.push(thread::spawn(move || {
