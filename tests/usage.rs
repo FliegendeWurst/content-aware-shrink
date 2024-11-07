@@ -1,7 +1,6 @@
 use std::{fs::File, io::BufReader};
 
 use image::ImageFormat;
-use rand::{rngs::SmallRng, SeedableRng};
 
 use content_aware_shrink::*;
 
@@ -20,7 +19,7 @@ fn noise_test() {
 	.unwrap()
 	.into_rgb8();
 
-	let mut img_data = ImageData::new(&img, Axis::Horizontal, SmallRng::from_seed([0x57; 32]));
+	let mut img_data = ImageData::new(&img, Axis::Horizontal, None);
 
 	for n in 1..99 {
 		img = cut_once(&img, Axis::Horizontal);
@@ -42,7 +41,7 @@ fn picture_test() {
 	.unwrap()
 	.into_rgb8();
 
-	let mut img_data = ImageData::new(&img, Axis::Horizontal, SmallRng::from_seed([0x17; 32]));
+	let mut img_data = ImageData::new(&img, Axis::Horizontal, None);
 	for n in 1..99 {
 		img = cut_once(&img, Axis::Horizontal);
 		img_data.cut_once();

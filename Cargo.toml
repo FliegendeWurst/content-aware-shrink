@@ -7,12 +7,11 @@ license = "GPL-3.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrayvec = "0.7.4"
+dary_heap = "0.3.6"
 env_logger = { version = "0.10.0", default-features = false, features = ["color", "auto-color", "humantime"] }
 image = "0.24.5"
 log = "0.4.19"
 pathfinding = "4.2.1"
-rand = { version = "0.8.5", features = ["small_rng"] }
 
 [profile.release]
 lto = true

@@ -1,16 +1,16 @@
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
-use arrayvec::ArrayVec;
-
+use dary_heap::{OctonaryHeap, QuaternaryHeap, QuinaryHeap, TernaryHeap, BinaryHeap};
 use image::{ImageBuffer, Rgb};
 use log::{debug, trace};
 use pathfinding::prelude::dijkstra;
-use rand::Rng;
 
 pub type Image = ImageBuffer<Rgb<u8>, Vec<u8>>;
 type Index = u32;
 
-pub struct ImageData<R: Rng> {
+const COST_PER_PIXEL: u32 = 32;
+
+pub struct ImageData {
 	pub img_height: usize,
 	pub img_width: usize,
 	nodes: Vec<PixelNode>,
@@ -18,50 +18,51 @@ pub struct ImageData<R: Rng> {
 	rescan: HashSet<usize>,
 	d: Vec<u32>,
 	p: Vec<usize>,
-	rng: R,
 }
 
-impl<R: Rng> ImageData<R> {
-	pub fn new(img: &Image, axis: Axis, rng: R) -> Self {
+impl ImageData {
+	pub fn new(img: &Image, axis: Axis, mask: Option<&Image>) -> Self {
 		assert_eq!(Axis::Horizontal, axis);
 		let mut nodes = Vec::with_capacity(img.height() as usize * img.width() as usize);
 		let end_node = (img.height() * img.width() + 1) as Index;
 
 		for y in 0..img.height() {
 			for x in 0..img.width() {
-				let mut neighbors = ArrayVec::new();
+				let mut neighbors = [Index::MAX; 3];
 				if x < img.width() - 1 {
 					if y > 0 {
 						let idx = (y - 1) * img.width() + x + 1;
-						neighbors.push(idx as Index);
+						neighbors.insert(idx as Index);
 					}
 					let idx = y * img.width() + x + 1;
-					neighbors.push(idx as Index);
+					neighbors.insert(idx as Index);
 					if y < img.height() - 1 {
 						let idx = (y + 1) * img.width() + x + 1;
-						neighbors.push(idx as Index);
+						neighbors.insert(idx as Index);
 					}
 				} else {
-					neighbors.push(end_node as Index);
+					neighbors.insert(end_node as Index);
 				}
 
 				let cost = if y == 0 || y == img.height() - 1 {
 					u32::MAX
+				} else if mask.map(|mask| *mask.get_pixel(x, y) == Rgb([0x00; 3])).unwrap_or(false) {
+					0
 				} else {
 					calc_cost(img.get_pixel(x, y - 1), img.get_pixel(x, y + 1))
 				};
 
-				let mut neighbors_back = ArrayVec::new();
+				let mut neighbors_back = [Index::MAX; 3];
 				if x > 0 {
 					if y > 0 {
 						let idx = (y - 1) * img.width() + x - 1;
-						neighbors_back.push(idx as Index);
+						neighbors_back.insert(idx as Index);
 					}
 					let idx = y * img.width() + x - 1;
-					neighbors_back.push(idx as Index);
+					neighbors_back.insert(idx as Index);
 					if y < img.height() - 1 {
 						let idx = (y + 1) * img.width() + x - 1;
-						neighbors_back.push(idx as Index);
+						neighbors_back.insert(idx as Index);
 					}
 				}
 
@@ -71,25 +72,31 @@ impl<R: Rng> ImageData<R> {
 					neighbors_back,
 					cost,
 					tainted: false,
+					//above: if y > 0 { (y-1) * img.width() + x } else { Index::MAX },
+					//below: if y < img.height() - 1 { (y+1) * img.width() + x } else { Index::MAX },
 				});
 			}
 		}
 
 		let start_node = PixelNode {
 			color: *img.get_pixel(0, 0),
-			neighbors_back: ArrayVec::new(),
-			neighbors: ArrayVec::new(),
+			neighbors_back: [Index::MAX; 3],
+			neighbors: [Index::MAX; 3],
 			cost: 0,
 			tainted: false,
+			//above: Index::MAX,
+			//below: Index::MAX,
 		};
 		nodes.push(start_node);
 
 		let end_node = PixelNode {
 			color: *img.get_pixel(0, 0),
-			neighbors: ArrayVec::new(),
-			neighbors_back: ArrayVec::new(),
+			neighbors: [Index::MAX; 3],
+			neighbors_back: [Index::MAX; 3],
 			cost: 0,
 			tainted: false,
+			//above: Index::MAX,
+			//below: Index::MAX,
 		};
 		nodes.push(end_node);
 
@@ -104,25 +111,28 @@ impl<R: Rng> ImageData<R> {
 			img_width: img.width() as usize,
 			valid_nodes: (img.height() * img.width()) as usize,
 			rescan: HashSet::new(),
-			rng,
 		}
 	}
 
 	pub fn cut_once(&mut self) {
 		let d = &mut self.d;
 		let p = &mut self.p;
-		let rng = &mut self.rng;
 
-		let mut q = BinaryHeap::new();
+		// binary: 34.442s (std) 34.474s
+		// ternary: 34.610s
+		// quaternary: 33.797 / 34.433 / (34.128 with_capacity)
+		// quinary: 39.910s
+		// octonary: 40.245s
+
+		let mut q = QuaternaryHeap::with_capacity(16384); // BinaryHeap::new();
 		d[self.nodes.len() - 2] = 0;
 
 		for y in 1..self.img_height - 1 {
 			let idx = y * self.img_width;
-			if !self.nodes[idx].neighbors.is_empty() {
+			if self.nodes[idx].neighbors[0] != Index::MAX {
 				// println!("inserting {}", u32::MAX - self.nodes[idx].cost);
-				q.add((
+				q.push((
 					u32::MAX - self.nodes[idx].cost,
-					rng.gen_range(u32::MAX / 2..u32::MAX),
 					idx as Index,
 				));
 				p[idx] = self.nodes.len() - 2;
@@ -131,14 +141,15 @@ impl<R: Rng> ImageData<R> {
 		}
 
 		for x in self.rescan.drain() {
-			if self.nodes[x].neighbors.is_empty() {
+			if self.nodes[x].neighbors[0] == Index::MAX {
 				continue;
 			}
-			q.add((u32::MAX - d[x], rng.gen_range(u32::MAX / 2..u32::MAX), x as Index));
+			q.push((u32::MAX - d[x], x as Index));
 		}
 
 		let mut best_end = u32::MAX;
-		while let Some((total_cost, _rand, src)) = q.remove_elem() {
+		while let Some((total_cost, src)) = q.pop() {
+			// println!("q size {} best_end {}", q.len(), best_end);
 			let src = src as usize;
 			if src == usize::MAX {
 				continue;
@@ -147,6 +158,9 @@ impl<R: Rng> ImageData<R> {
 				break;
 			}
 			for &next_node in &self.nodes[src].neighbors {
+				if next_node == Index::MAX {
+					break;
+				}
 				let next_node = next_node as usize;
 				let cost = self.nodes[next_node].cost;
 				assert!(d[src] < u32::MAX);
@@ -156,7 +170,10 @@ impl<R: Rng> ImageData<R> {
 				if d[src] + cost < d[next_node] {
 					d[next_node] = d[src] + cost;
 					p[next_node] = src;
-					q.add((u32::MAX - d[next_node], rng.gen(), next_node as Index));
+					//if best_end != u32::MAX && d[next_node] >= best_end {
+					//	continue;
+					//}
+					q.push((u32::MAX - d[next_node], next_node as Index));
 					if next_node == self.nodes.len() - 1 {
 						best_end = d[next_node];
 						debug!("NEW ALGO: {best_end}");
@@ -192,6 +209,9 @@ impl<R: Rng> ImageData<R> {
 			d[idx] = u32::MAX;
 			q.push(idx as Index);
 			for &n in &self.nodes[idx].neighbors {
+				if n == Index::MAX {
+					break;
+				}
 				d[n as usize] = u32::MAX;
 			}
 			q.extend(&self.nodes[idx].neighbors);
@@ -199,7 +219,7 @@ impl<R: Rng> ImageData<R> {
 			let mut prev = idx as Index;
 			for i in 0..self.nodes[idx].neighbors.len() {
 				let next = self.nodes[idx].neighbors[i];
-				if next == prev {
+				if next == prev || next == Index::MAX {
 					continue;
 				}
 				prev = next;
@@ -213,21 +233,56 @@ impl<R: Rng> ImageData<R> {
 				);
 			}
 
-			self.nodes[idx].neighbors.clear();
+			self.nodes[idx].neighbors[0] = Index::MAX;
+			self.nodes[idx].neighbors[1] = Index::MAX;
+			self.nodes[idx].neighbors[2] = Index::MAX;
 			self.valid_nodes -= 1;
 			// restore correct weights for neighboring nodes:
 			// find correct pixel above
+			/*
+			let mut above = self.nodes[idx].above as usize;
+			let mut above2;
+			if above as Index != Index::MAX {
+				above2 = self.nodes[above].above as usize;
+				if above2 as Index == Index::MAX {
+					above2 = above;
+				}
+			} else {
+				above = idx;
+				above2 = idx;
+			}
+			// find correct pixel below
+			let mut below = self.nodes[idx].below as usize;
+			let mut below2;
+			if below as Index != Index::MAX {
+				below2 = self.nodes[below].below as usize;
+				if below2 as Index == Index::MAX {
+					below2 = below;
+				}
+			} else {
+				below = idx;
+				below2 = idx;
+			}
+
+			if above as Index != Index::MAX {
+				self.nodes[above].below = below as _;
+			}
+			if below as Index != Index::MAX {
+				self.nodes[below].above = above as _;
+			}
+			*/
+
 			let mut above = idx;
 			while above >= self.img_width {
 				above -= self.img_width;
-				if !self.nodes[above].neighbors.is_empty() {
+				if self.nodes[above].neighbors[0] != Index::MAX {
 					break;
 				}
 			}
 			let mut above2 = above;
 			while above2 >= self.img_width {
 				above2 -= self.img_width;
-				if !self.nodes[above2].neighbors.is_empty() {
+				if self.nodes[above2].neighbors[0] != Index::MAX {
 					break;
 				}
 			}
@@ -235,14 +290,14 @@ impl<R: Rng> ImageData<R> {
 			let mut below = idx;
 			while below < self.nodes.len() - self.img_width - 2 {
 				below += self.img_width;
-				if !self.nodes[below].neighbors.is_empty() {
+				if self.nodes[below].neighbors[0] != Index::MAX {
 					break;
 				}
 			}
 			let mut below2 = below;
 			while below2 < self.nodes.len() - self.img_width - 2 {
 				below2 += self.img_width;
-				if !self.nodes[below2].neighbors.is_empty() {
+				if self.nodes[below2].neighbors[0] != Index::MAX {
 					break;
 				}
 			}
@@ -252,7 +307,9 @@ impl<R: Rng> ImageData<R> {
 				q.push(above as Index);
 			}
 			if above2 != above {
-				self.nodes[above].cost = calc_cost(&self.nodes[above2].color, &self.nodes[below].color);
+				if self.nodes[above].cost != 0 {
+					self.nodes[above].cost = calc_cost(&self.nodes[above2].color, &self.nodes[below].color);
+				}
 				d[above] = u32::MAX;
 				q.push(above2 as Index);
 			}
@@ -260,13 +317,18 @@ impl<R: Rng> ImageData<R> {
 				q.push(below as Index);
 			}
 			if below2 != below {
-				self.nodes[below].cost = calc_cost(&self.nodes[above].color, &self.nodes[below2].color);
+				if self.nodes[below].cost != 0 {
+					self.nodes[below].cost = calc_cost(&self.nodes[above].color, &self.nodes[below2].color);
+				}
 				d[below] = u32::MAX;
 				q.push(below2 as Index);
 			}
 
 			// update neighbors of preceding pixels
 			for (prev_i, prev) in self.nodes[idx].neighbors_back.clone().into_iter().enumerate() {
+				if prev == Index::MAX {
+					break;
+				}
 				let prev = prev as usize;
 				trace!(
 					"want to get rid of {idx} {choice:?} {:?}",
@@ -295,13 +357,9 @@ impl<R: Rng> ImageData<R> {
 					0 => {
 						if above != idx as usize {
 							trace!("case 0, at idx {idx} and prev {prev} and above {above}");
-							self.nodes[prev].neighbors.insert(0, above as Index);
-							self.nodes[prev].neighbors.sort();
-							//assert!(self.nodes[above].neighbors_back.remove_item(&idx).is_some());
+							self.nodes[prev].neighbors.insert(above as Index);
 							self.nodes[above].neighbors_back.remove_item(&(p[idx] as Index));
-							self.nodes[above].neighbors_back.push(prev as u32);
-							self.nodes[above].neighbors_back.sort();
-							// assert_eq!(3, self.nodes[above].neighbors_back.len());
+							self.nodes[above].neighbors_back.insert(prev as Index);
 						}
 					},
 					// . .
@@ -312,11 +370,9 @@ impl<R: Rng> ImageData<R> {
 					1 if choice == Some(0) && prev_i != 0 => {
 						if below2 != below {
 							trace!("case 1, at idx {idx} and prev {prev} and below2 {below2}, {:?}", self.nodes[below2].neighbors_back);
-							self.nodes[prev].neighbors.push(below2 as Index);
-							self.nodes[prev].neighbors.sort();
+							self.nodes[prev].neighbors.insert(below2 as Index);
 							self.nodes[below2].neighbors_back.remove_item(&(p[idx] as Index));
-							self.nodes[below2].neighbors_back.insert(0, prev  as Index);
-							self.nodes[below2].neighbors_back.sort();
+							self.nodes[below2].neighbors_back.insert(prev as Index);
 						}
 					},
 					// p .
@@ -325,11 +381,9 @@ impl<R: Rng> ImageData<R> {
 					1 if choice != Some(2) => {
 						if below != idx {
 							trace!("case 1a, at idx {idx} and prev {prev} {prev_i} {:?} and below {below}, {:?}", self.nodes[prev].neighbors, self.nodes[below].neighbors_back);
-							self.nodes[prev].neighbors.push(below as Index);
-							self.nodes[prev].neighbors.sort();
+							self.nodes[prev].neighbors.insert(below as Index);
 							self.nodes[below].neighbors_back.remove_item(&(p[idx] as Index));
-							self.nodes[below].neighbors_back.insert(0, prev as Index);
-							self.nodes[below].neighbors_back.sort();
+							self.nodes[below].neighbors_back.insert(prev as Index);
 						}
 						assert!(prev < self.img_width);
 					},
@@ -341,12 +395,11 @@ impl<R: Rng> ImageData<R> {
 						if above2 != above {
 							trace!("case 1b, at idx {idx} and prev {prev} and above2 {above2}, {:?}", self.nodes[above2].neighbors_back);
 
-							self.nodes[prev].neighbors.insert(0, above2 as Index);
-							self.nodes[prev].neighbors.sort();
+							self.nodes[prev].neighbors.insert(above2 as Index);
 							trace!("result {:?}", self.nodes[prev].neighbors);
 							//assert!(self.nodes[below2].neighbors_back.remove_item(&idx).is_some());
 							self.nodes[above2].neighbors_back.remove_item(&(p[idx] as Index));
-							self.nodes[above2].neighbors_back.push(prev as Index);
+							self.nodes[above2].neighbors_back.insert(prev as Index);
 							self.nodes[above2].neighbors_back.sort();
 							// assert_eq!(3, self.nodes[below2].neighbors_back.len());
 						}
@@ -359,11 +412,9 @@ impl<R: Rng> ImageData<R> {
 					2 => {
 						if below != idx {
 							trace!("case 2, at idx {idx} and prev {prev} and below {below}, {:?}", self.nodes[below].neighbors_back);
-							self.nodes[prev].neighbors.push(below as Index);
-							self.nodes[prev].neighbors.sort();
+							self.nodes[prev].neighbors.insert(below as Index);
 							self.nodes[below].neighbors_back.remove_item(&(p[idx] as Index));
-							self.nodes[below].neighbors_back.push(prev as Index);
-							self.nodes[below].neighbors_back.sort();
+							self.nodes[below].neighbors_back.insert(prev as Index);
 							trace!("resulting below {:?}", self.nodes[below].neighbors_back);
 						}
 					},
@@ -373,16 +424,21 @@ impl<R: Rng> ImageData<R> {
 			}
 			last_idx = Some(idx);
 		}
-		// println!();
 		while !q.is_empty() {
 			let mut new_q = Vec::new();
 			for x in q {
+				if x == Index::MAX {
+					continue;
+				}
 				let x = x as usize;
 				d[x] = u32::MAX;
 				self.nodes[x].tainted = true;
 				for i in 0..self.nodes[x].neighbors.len() {
 					let neigh = self.nodes[x].neighbors[i] as usize;
-					if self.nodes[p[neigh]].neighbors.is_empty() {
+					if neigh as Index == Index::MAX {
+						break;
+					}
+					if self.nodes[p[neigh]].neighbors[0] == Index::MAX {
 						continue;
 					}
 					d[neigh] = u32::MAX;
@@ -400,7 +456,10 @@ impl<R: Rng> ImageData<R> {
 				continue;
 			}
 			self.nodes[i].tainted = false;
-			for &prev in &*self.nodes[i].neighbors_back {
+			for prev in self.nodes[i].neighbors_back {
+				if prev == Index::MAX {
+					break;
+				}
 				let prev = prev as usize;
 				if d[prev] != u32::MAX {
 					// println!("rescan! {} {}", prev, u32::MAX - d[prev]);
@@ -420,7 +479,7 @@ impl<R: Rng> ImageData<R> {
 			let mut y = 0;
 			for y_check in 0..self.img_height {
 				let node = &self.nodes[y_check * self.img_width + x];
-				if node.neighbors.is_empty() {
+				if node.neighbors[0] == Index::MAX {
 					continue;
 				}
 				buffer.put_pixel(x as u32, y, node.color);
@@ -437,15 +496,15 @@ impl<R: Rng> ImageData<R> {
 
 fn calc_cost(a: &Rgb<u8>, b: &Rgb<u8>) -> u32 {
 	let cost: u32 = (0..3).map(|i| (a.0[i].abs_diff(b.0[i]) as u32).pow(2)).sum();
-	(100.0 * (cost as f32).sqrt()) as u32
+	COST_PER_PIXEL + (100.0 * (cost as f32).sqrt()) as u32
 }
 
 struct PixelNode {
 	// total size: 40 bytes (should be optimized further)
 	color: Rgb<u8>,
 	cost: u32,
-	neighbors: ArrayVec<Index, 3>,
-	neighbors_back: ArrayVec<Index, 3>,
+	neighbors: [Index; 3],
+	neighbors_back: [Index; 3],
 	tainted: bool,
 }
 
@@ -585,13 +644,7 @@ impl<T: PartialEq<U>, U> VecRemoveItem<T, U> for Vec<T> {
 	}
 }
 
-impl<T: PartialEq<U>, U, const Z: usize> VecRemoveItem<T, U> for ArrayVec<T, Z> {
-	fn remove_item(&mut self, item: &U) -> Option<T> {
-		self.iter().position(|n| n == item).map(|idx| self.remove(idx))
-	}
-}
-
-type QueueItem = (u32, u32, u32);
+type QueueItem = (u32, Index);
 
 trait NodeQueue<T> {
 	fn remove_elem(&mut self) -> Option<T>;
@@ -626,4 +679,41 @@ impl<T> NodeQueue<T> for VecDeque<T> {
 	fn add(&mut self, item: T) {
 		self.push_back(item)
 	}
+}
+
+trait ArrayInsert<T> {
+	fn insert(&mut self, item: T);
+}
+
+impl ArrayInsert<Index> for [Index; 3] {
+    fn insert(&mut self, item: Index) {
+        if self[2] == Index::MAX {
+			self[2] = item;
+		} else if self[1] == Index::MAX {
+			self[1] = item;
+		} else if self[0] == Index::MAX {
+			self[0] = item;
+		}
+		self.sort();
+    }
+}
+
+impl VecRemoveItem<Index, Index> for [Index; 3] {
+    fn remove_item(&mut self, item: &Index) -> Option<Index> {
+		let item = *item;
+        if self[2] == item {
+			self[2] = Index::MAX;
+			Some(item)
+		} else if self[1] == item {
+			self[1] = Index::MAX;
+			self.sort();
+			Some(item)
+		} else if self[0] == item {
+			self[0] = Index::MAX;
+			self.sort();
+			Some(item)
+		} else {
+			None
+		}
+    }
 }
