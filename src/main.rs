@@ -1,6 +1,6 @@
-use std::{env, thread};
+use std::env;
 
-use image::{io::Reader as ImageReader, ImageBuffer};
+use image::io::Reader as ImageReader;
 
 static SLOW: &'static str = "--slow";
 static USAGE: &'static str =
@@ -14,6 +14,9 @@ fn main() {
 		println!("{USAGE}");
 		std::process::exit(1);
 	}
+	let _ = env_logger::builder()
+		.parse_filters("content_aware_shrink=info")
+		.try_init();
 	let slow_mode = args.iter().any(|x| x == SLOW);
 	let path = args.iter().filter(|&x| x != SLOW).next().cloned();
 	if let Some(p) = &path {
@@ -33,7 +36,7 @@ fn main() {
 			x => x.parse().expect("invalid number of cuts"),
 		})
 		.unwrap_or(u32::MAX);
-	let (save_interval, mut save_height, mut save_width) = args
+	let (save_interval, save_height, save_width) = args
 		.iter()
 		.filter(|&x| x != SLOW)
 		.skip(1)
@@ -41,7 +44,11 @@ fn main() {
 		.map(|x| match x.to_string_lossy().as_ref() {
 			x if x.starts_with('@') && x.contains('x') => {
 				let parts = x[1..].split_once('x').unwrap();
-				(0, parts.1.parse().expect("invalid target height"), parts.0.parse().expect("invalid target width"))
+				(
+					0,
+					parts.1.parse().expect("invalid target height"),
+					parts.0.parse().expect("invalid target width"),
+				)
 			},
 			x if x.starts_with('@') => (0, x[1..].parse().expect("invalid target height"), 0),
 			x => (x.parse().expect("invalid number of cuts"), 0, 0),
@@ -49,19 +56,7 @@ fn main() {
 		.unwrap_or((20, 0, 0));
 	let cuts = (img.height() - 2).min(cuts);
 
-	let flip = save_height == img.height();
-	if flip {
-		let mut new_img = ImageBuffer::new(img.height(), img.width());
-		for y in 0..img.height() {
-			for x in 0..img.width() {
-				new_img.put_pixel(y, x, *img.get_pixel(x, y));
-			}
-		}
-		img = new_img;
-		std::mem::swap(&mut save_height, &mut save_width);
-	}
-
-	let mask = None;//ImageReader::open("/home/arne/Downloads/mask.png").unwrap().decode().unwrap().into_rgb8();
+	let mask = None; //ImageReader::open("/home/arne/Downloads/mask.png").unwrap().decode().unwrap().into_rgb8();
 
 	if slow_mode {
 		for i in 0..cuts {
@@ -76,33 +71,9 @@ fn main() {
 			img = new_img;
 		}
 	} else {
-		//let axis = if img.height() != save_height { Axis::Horizontal } else { Axis::Vertical };
-		let height = img.height();
 		let mut img_data = ImageData::new(img, mask);
-		let mut threads = vec![];
-		for i in 0..cuts {
-			img_data.cut_once(Axis::Horizontal);
-			println!("iteration {i}, img height {}", height - 1 - i);
-			if (save_interval != 0 && i % save_interval == 0) || height - 1 - i == save_height {
-				let mut img = img_data.get_img();
-				let exit = img.height() == save_height && img.width() == save_width;
-				threads.push(thread::spawn(move || {
-					if flip {
-						let mut new_img = ImageBuffer::new(img.height(), img.width());
-						for y in 0..img.height() {
-							for x in 0..img.width() {
-								new_img.put_pixel(y, x, *img.get_pixel(x, y));
-							}
-						}
-						img = new_img;
-					}
-					img.save(&format!("iteration_f{}.png", i)).unwrap();
-				}));
-				if exit {
-					break;
-				}
-			}
-		}
-		threads.into_iter().for_each(|x| x.join().unwrap());
+		img_data.cut_to_dimensions(save_width as _, save_height as _);
+		let img = img_data.get_img();
+		img.save("result.png").unwrap();
 	}
 }

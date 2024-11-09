@@ -1,6 +1,8 @@
+use std::error::Error;
+
 use dary_heap::QuaternaryHeap;
 use image::{ImageBuffer, Rgb};
-use log::debug;
+use log::{debug, info};
 use pathfinding::prelude::dijkstra;
 
 pub type Image = ImageBuffer<Rgb<u8>, Vec<u8>>;
@@ -14,7 +16,7 @@ pub struct ImageData {
 	pub img_width: usize,
 	i: Vec<Vec<(u32, u32, u32, u32)>>,
 	mask: Option<Image>,
-	img: Image
+	img: Image,
 }
 
 impl ImageData {
@@ -22,22 +24,31 @@ impl ImageData {
 		let mask = mask_img.as_ref();
 		let mut i = vec![];
 		for y in 0..img.height() {
-			let i_line = (0..img.width()).map(|x| {
-				let h_cost = if y == 0 || y == img.height() - 1 {
-					MAX_COST
-				} else if mask.map(|mask| *mask.get_pixel(x, y) == Rgb([0x00; 3])).unwrap_or(false) {
-					0
-				} else {
-					calc_cost(img.get_pixel(x, y - 1), img.get_pixel(x, y + 1))
-				};
-				let v_cost = if x == 0 || x == img.width() - 1 {
-					MAX_COST
-				} else if mask.map(|mask| *mask.get_pixel(x, y) == Rgb([0x00; 3])).unwrap_or(false) {
-					0
-				} else {
-					calc_cost(img.get_pixel(x - 1, y), img.get_pixel(x + 1, y))
-				};
-			(x, y, h_cost, v_cost) }).collect();
+			let i_line = (0..img.width())
+				.map(|x| {
+					let h_cost = if y == 0 || y == img.height() - 1 {
+						MAX_COST
+					} else if mask
+						.map(|mask| *mask.get_pixel(x, y) == Rgb([0x00; 3]))
+						.unwrap_or(false)
+					{
+						0
+					} else {
+						calc_cost(img.get_pixel(x, y - 1), img.get_pixel(x, y + 1))
+					};
+					let v_cost = if x == 0 || x == img.width() - 1 {
+						MAX_COST
+					} else if mask
+						.map(|mask| *mask.get_pixel(x, y) == Rgb([0x00; 3]))
+						.unwrap_or(false)
+					{
+						0
+					} else {
+						calc_cost(img.get_pixel(x - 1, y), img.get_pixel(x + 1, y))
+					};
+					(x, y, h_cost, v_cost)
+				})
+				.collect();
 			i.push(i_line);
 		}
 
@@ -47,6 +58,41 @@ impl ImageData {
 			i,
 			mask: mask_img,
 			img,
+		}
+	}
+
+	pub fn cut_to_dimensions(&mut self, width: usize, height: usize) {
+		let aspect_ratio = width as f32 / height as f32;
+		loop {
+			let current_width = self.i[0].len();
+			let current_height = self.i.len();
+			if current_width == width && current_height == height {
+				return;
+			}
+			info!("cut to {current_width} x {current_height}");
+			if current_width < width {
+				panic!("request to shrink to width larger than current");
+			}
+			if current_height < height {
+				panic!("request to shrink to height larger than current");
+			}
+			// try to get the best aspect ratio
+			let aspect_ratio_h = (current_width as f32) / (current_height as f32 - 1.0);
+			let aspect_ratio_v = (current_width as f32 - 1.0) / (current_height as f32);
+			let h_permitted = current_height != height;
+			let v_permitted = current_width != width;
+			let axis = if h_permitted && (aspect_ratio_h - aspect_ratio).abs() < (aspect_ratio_v - aspect_ratio).abs() {
+				Axis::Horizontal
+			} else if v_permitted && (aspect_ratio_v - aspect_ratio).abs() < (aspect_ratio_h - aspect_ratio).abs() {
+				Axis::Vertical
+			} else if h_permitted {
+				Axis::Horizontal
+			} else if v_permitted {
+				Axis::Vertical
+			} else {
+				unreachable!()
+			};
+			self.cut_once(axis);
 		}
 	}
 
@@ -80,10 +126,7 @@ impl ImageData {
 					let y = idx / current_width;
 					let x = idx % current_width;
 					if self.i[y][x].$cost_idx != MAX_COST {
-						q.push((
-							u32::MAX - self.i[y][x].$cost_idx,
-							idx as Index,
-						));
+						q.push((u32::MAX - self.i[y][x].$cost_idx, idx as Index));
 						p[idx] = start_node;
 						d[idx] = self.i[y][x].$cost_idx;
 					}
@@ -94,14 +137,6 @@ impl ImageData {
 			Axis::Vertical => init_layer!(x, 1..current_width - 1, x, 3),
 			Axis::Horizontal => init_layer!(y, 1..current_height - 1, y * current_width, 2),
 		}
-
-		// TODO: what is this
-		//for x in self.rescan.drain() {
-		//	if self.nodes[x].neighbors[0] == Index::MAX {
-		//		continue;
-		//	}
-		//	q.push((u32::MAX - d[x], x as Index));
-		//}
 
 		let mut best_end = u32::MAX;
 		while let Some((total_cost, src)) = q.pop() {
@@ -114,7 +149,7 @@ impl ImageData {
 			// check whether we are done
 			if match axis {
 				Axis::Vertical => y == current_height - 1,
-				Axis::Horizontal => x == current_width - 1
+				Axis::Horizontal => x == current_width - 1,
 			} {
 				if d[src] < best_end {
 					best_end = d[src];
@@ -190,32 +225,53 @@ impl ImageData {
 			}
 			x = old_x;
 			y = old_y;
-			// recalculate cost for replaced pixel
-			let h_cost = if y == 0 || y == current_height - 1 {
-				MAX_COST
-			} else if self.mask.as_ref().map(|mask| *mask.get_pixel(x as _, y as _) == Rgb([0x00; 3])).unwrap_or(false) {
-				0
-			} else {
-				let (x2, y2, _, _) = self.i[old_y - 1][old_x];
-				let (x3, y3, _, _) = self.i[old_y + 1][old_x];
-				calc_cost(self.img.get_pixel(x2, y2), self.img.get_pixel(x3, y3))
-			};
-			let v_cost = if x == 0 || x == current_width - 1 {
-				MAX_COST
-			} else if self.mask.as_ref().map(|mask| *mask.get_pixel(x as _, y as _) == Rgb([0x00; 3])).unwrap_or(false) {
-				0
-			} else {
-				let (x2, y2, _, _) = self.i[old_y][old_x - 1];
-				let (x3, y3, _, _) = self.i[old_y][old_x + 1];
-				calc_cost(self.img.get_pixel(x2, y2), self.img.get_pixel(x3, y3))
-			};
-			self.i[y][x].2 = h_cost;
-			self.i[y][x].3 = v_cost;
+			macro_rules! recalculate {
+				($x:expr, $y:expr) => {{
+					// recalculate cost for replaced pixel
+					let h_cost = if y == 0 || y == current_height - 1 {
+						MAX_COST
+					} else if self
+						.mask
+						.as_ref()
+						.map(|mask| *mask.get_pixel(x as _, y as _) == Rgb([0x00; 3]))
+						.unwrap_or(false)
+					{
+						0
+					} else {
+						let (x2, y2, _, _) = self.i[old_y - 1][old_x];
+						let (x3, y3, _, _) = self.i[old_y + 1][old_x];
+						calc_cost(self.img.get_pixel(x2, y2), self.img.get_pixel(x3, y3))
+					};
+					let v_cost = if x == 0 || x == current_width - 1 {
+						MAX_COST
+					} else if self
+						.mask
+						.as_ref()
+						.map(|mask| *mask.get_pixel(x as _, y as _) == Rgb([0x00; 3]))
+						.unwrap_or(false)
+					{
+						0
+					} else {
+						let (x2, y2, _, _) = self.i[old_y][old_x - 1];
+						let (x3, y3, _, _) = self.i[old_y][old_x + 1];
+						calc_cost(self.img.get_pixel(x2, y2), self.img.get_pixel(x3, y3))
+					};
+					self.i[y][x].2 = h_cost;
+					self.i[y][x].3 = v_cost;
+				}};
+			}
+			recalculate!(x, y);
+			match axis {
+				Axis::Vertical => recalculate!(x - 1, y),
+				Axis::Horizontal => recalculate!(x, y - 1),
+			}
 		}
 		// shrink i matrix
 		match axis {
 			Axis::Vertical => {
-				self.i.iter_mut().for_each(|x| { x.pop(); });
+				self.i.iter_mut().for_each(|x| {
+					x.pop();
+				});
 			},
 			Axis::Horizontal => {
 				self.i.pop();
@@ -237,8 +293,9 @@ impl ImageData {
 		buffer
 	}
 
-	pub fn save_img(&self, path: &str) {
-		self.get_img().save(path).unwrap();
+	pub fn save_img(&self, path: &str) -> Result<(), Box<dyn Error>> {
+		self.get_img().save(path)?;
+		Ok(())
 	}
 }
 
@@ -384,9 +441,9 @@ impl<T: PartialEq<U>, U> VecRemoveItem<T, U> for Vec<T> {
 }
 
 impl VecRemoveItem<Index, Index> for [Index; 3] {
-    fn remove_item(&mut self, item: &Index) -> Option<Index> {
+	fn remove_item(&mut self, item: &Index) -> Option<Index> {
 		let item = *item;
-        if self[2] == item {
+		if self[2] == item {
 			self[2] = Index::MAX;
 			Some(item)
 		} else if self[1] == item {
@@ -400,5 +457,5 @@ impl VecRemoveItem<Index, Index> for [Index; 3] {
 		} else {
 			None
 		}
-    }
+	}
 }
