@@ -1,12 +1,11 @@
 use std::env;
 
-use image::io::Reader as ImageReader;
-
 static SLOW: &'static str = "--slow";
 static USAGE: &'static str =
 	"USAGE: content-aware-shrink [--slow] <file> [<cuts>|MAX [<save-interval>|@<target-height>|@<target-width>x<target-height>]]";
 
 use content_aware_shrink::*;
+use image::ImageReader;
 
 fn main() {
 	let mut args = env::args_os().skip(1).collect::<Vec<_>>();
